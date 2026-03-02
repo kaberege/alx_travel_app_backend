@@ -205,3 +205,44 @@ EMAIL_PORT = 587
 EMAIL_HOST_USER = env('EMAIL_HOST_USER')
 EMAIL_HOST_PASSWORD = env('EMAIL_HOST_PASSWORD')
 DEFAULT_FROM_EMAIL = env('DEFAULT_FROM_EMAIL')
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "verbose": {
+            "format": "{levelname} {asctime} {module} {process:d} {thread:d} {message}",
+            "style": "{",
+        },
+        "simple": {
+            "format": "{levelname} {message}",
+            "style": "{",
+        },
+    },
+    "handlers": {
+        "console": {
+            "level": env("DJANGO_LOG_LEVEL"),
+            "class": "logging.StreamHandler",
+            "formatter": "simple",
+        },
+        "file": {
+            "level": env("DJANGO_LOG_LEVEL"),
+            "class": "logging.handlers.RotatingFileHandler",
+            "filename": BASE_DIR / env("DJANGO_LOG_FILE"),
+            "maxBytes": 5 * 1024 * 1024,
+            "backupCount": 5,
+            "delay": True,
+            "formatter": "verbose",
+        },
+    },
+    "loggers": {
+        "users": {
+            "handlers": ["console", "file"],
+            "level": env("DJANGO_LOG_LEVEL"),
+        },
+        "listings": {
+            "handlers": ["console", "file"],
+            "level": env("DJANGO_LOG_LEVEL"),
+        },
+    },
+}
