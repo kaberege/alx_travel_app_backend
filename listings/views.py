@@ -15,6 +15,9 @@ from .serializers import PaymentSerializer
 from .tasks import send_payment_confirmation_email, send_booking_confirmation_email
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
+import logging
+
+logger = logging.getLogger(__name__)
 
 CHAPA_SECRET_KEY = os.environ.get('CHAPA_SECRET_KEY')
 
@@ -40,6 +43,9 @@ class BookingViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         booking = serializer.save(user=self.request.user)
+
+        logger.info(f"Booking {booking.booking_id} created by user {self.request.user.user_id}")
+
         send_booking_confirmation_email.delay(
             booking.user.email,
             str(booking.booking_id)

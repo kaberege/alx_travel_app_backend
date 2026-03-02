@@ -6,6 +6,9 @@ from .serializers import RegisterUserSerializer, UpdateUserSerializer, LoginUser
 from rest_framework_simplejwt.tokens import RefreshToken
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
+import logging
+
+logger = logging.getLogger(__name__)
 
 User = get_user_model()  # Custom user model
 
@@ -28,9 +31,14 @@ class RegisterUserView(views.APIView):
         if serializer.is_valid():
             # Save the new user to the database if the data is valid
             serializer.save()
-            
+
+            logger.info(f"New user registered: {request.data.get('email')}")
+
             # Return a success message with HTTP status 201 (Created)
             return Response({"message": "User registered successfully"}, status=status.HTTP_201_CREATED)
+
+        logger.warning(f"Registration failed for email: {request.data.get('email')}. Errors: {serializer.errors}")
+
         # If the serializer data is invalid, return the validation errors with HTTP status 400 (Bad Request)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -51,6 +59,8 @@ class LoginUserView(views.APIView):
 
         # Check for data validation
         if not serializer.is_valid():
+            logger.warning(f"Login failed: Invalid data format for user: {request.data.get('email')}")
+
             return Response({"error": "Invalid email or password"}, status=status.HTTP_400_BAD_REQUEST)
     
         user_email = serializer.validated_data['email']
@@ -70,11 +80,18 @@ class LoginUserView(views.APIView):
                 # Create JWT token
                 refresh = RefreshToken.for_user(user)
                 access_token = refresh.access_token
+
+                logger.info(f"User logged in successfully: {user_email}")
+
                 # Return the tokens
                 return Response({'user_data':user_data,'access': str(access_token),'refresh': str(refresh)})
+            
+            logger.warning(f"Login failed: Incorrect password for user: {user_email}")
             return Response({"error": "Invalid password!"}, status=status.HTTP_400_BAD_REQUEST)
 
         except User.DoesNotExist:
+            logger.warning(f"Login failed: User does not exist: {user_email}")
+
             return Response({"error": "Invalid email!"}, status=status.HTTP_400_BAD_REQUEST)
 
 # Handle user update logic
@@ -96,7 +113,13 @@ class UpdateUserView(views.APIView):
 
         if serializer.is_valid():
             serializer.save()   # Update the user
+
+            logger.info(f"User profile updated: {request.user.email}")
+
             return Response(serializer.data, status=status.HTTP_200_OK)
+
+        logger.warning(f"Profile update failed for user: {request.user.email}. Errors: {serializer.errors}")
+
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 # This view uses the refresh token to blacklist it on logout
@@ -120,8 +143,13 @@ class LogoutUserView(views.APIView):
             refresh_token = request.data["refresh"]
             token = RefreshToken(refresh_token)
             token.blacklist()
+
+            logger.info(f"User logged out successfully: {request.user.email}")
+
             return Response({"message": "Successfully logged out"}, status=status.HTTP_205_RESET_CONTENT)
         except Exception as error:
+            logger.error(f"Logout failed for user: {request.user.email}. Error: {str(error)}")
+
             return Response({"error": "Invalid token or already blacklisted"}, status=status.HTTP_400_BAD_REQUEST)
         
 # Handle user delete logic
@@ -137,6 +165,10 @@ class DeleteUserView(views.APIView):
         }
     )
     def delete(self, request):
+        user_email = request.user.email
         instance = request.user
         instance.delete()  # Delete the user
+
+        logger.info(f"User account deleted: {user_email}")
+        
         return Response({"message": "User has been deleted successfully."}, status=status.HTTP_204_NO_CONTENT)

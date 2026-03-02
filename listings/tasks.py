@@ -2,7 +2,9 @@ from celery import shared_task
 from django.core.mail import send_mail
 from django.conf import settings
 from .models import Payment, Booking
+import logging
 
+logger = logging.getLogger(__name__)
 
 @shared_task
 def send_payment_confirmation_email(user_email, payment_id):
@@ -12,6 +14,8 @@ def send_payment_confirmation_email(user_email, payment_id):
     try:
         payment = Payment.objects.get(payment_id=payment_id)
     except Payment.DoesNotExist:
+        logger.error(f"Payment confirmation failed: Payment ID {payment_id} not found.")
+        
         return f"Payment with ID {payment_id} not found"
 
     subject = "Payment Confirmation"
