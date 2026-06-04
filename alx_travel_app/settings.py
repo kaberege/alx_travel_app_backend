@@ -36,7 +36,7 @@ SECRET_KEY = env('SECRET_KEY')
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = env('DEBUG')
 
-ALLOWED_HOSTS = ['*']
+ALLOWED_HOSTS = env("DJANGO_ALLOWED_HOSTS").split()
 
 
 # Application definition
@@ -96,11 +96,11 @@ WSGI_APPLICATION = 'alx_travel_app.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
-        'NAME': env('DATABASE_NAME'),
-        'USER': env('DATABASE_USER'),
-        'PASSWORD': env('DATABASE_PASSWORD'),
-        'HOST': env('DATABASE_HOST'),
-        'PORT': env('DATABASE_PORT')
+        'NAME': env('MYSQL_DATABASE'),
+        'USER': env('MYSQL_ROOT_USER'),
+        'PASSWORD': env('MYSQL_ROOT_PASSWORD'),
+        'HOST': env('MYSQL_HOST'),
+        'PORT': env('MYSQL_PORT')
     }
 }
 
@@ -156,10 +156,8 @@ MEDIA_ROOT = BASE_DIR / 'media'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-CORS_ALLOWED_ORIGINS = [
-    'http://localhost:5173',
-    'http://localhost:5174',
-]
+raw_origins = env('CORS_ALLOWED_ORIGINS')
+CORS_ALLOWED_ORIGINS = [origin.strip() for origin in raw_origins]
 
 AUTH_USER_MODEL = 'users.CustomUser'
 
@@ -190,8 +188,10 @@ SWAGGER_SETTINGS = {
 }
 
 # Celery settings
-CELERY_BROKER_URL = 'amqp://guest:guest@localhost:5672//'
-CELERY_RESULT_BACKEND = 'rpc://'
+# amqp://guest:guest@localhost:5672//
+CELERY_BROKER_URL = env('CELERY_BROKER_URL')
+# 'rpc://'
+CELERY_RESULT_BACKEND = env('CELERY_RESULT_BACKEND')
 CELERY_ACCEPT_CONTENT = ['application/json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
