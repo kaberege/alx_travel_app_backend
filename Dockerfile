@@ -33,6 +33,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Pull official base image
 FROM python:3.12-slim-bookworm
 
+# Install the minimal system dependencies needed to run MySQL client
+RUN apt-get update && apt-get install -y \
+    default-mysql-client \
+    && rm -rf /var/lib/apt/lists/*
+
 # Create the app user
 RUN useradd -m -r appuser && \
     mkdir /app && \
