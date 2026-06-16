@@ -156,7 +156,7 @@ MEDIA_ROOT = BASE_DIR / 'media'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-raw_origins = env('CORS_ALLOWED_ORIGINS')
+raw_origins = env('CORS_ALLOWED_ORIGINS_STR')
 CORS_ALLOWED_ORIGINS = [origin.strip() for origin in raw_origins.split(',')]
 
 AUTH_USER_MODEL = 'users.CustomUser'
