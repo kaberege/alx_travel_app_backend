@@ -12,6 +12,13 @@ ENV PYTHONDONTWRITEBYTECODE=1
 # Prevent Python from buffering stdout and stderr
 ENV PYTHONUNBUFFERED=1 
 
+# Install C compiler and MySQL development headers
+RUN apt-get update && apt-get install -y \
+    gcc \
+    default-libmysqlclient-dev \
+    pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
 # Upgrade pip and install dependencies
 RUN pip install --upgrade pip
 
