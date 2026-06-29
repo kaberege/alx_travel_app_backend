@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Listing, Booking, Payment
+from .models import Listing, PropertyAddress, PropertyOffers, PropertyDescription, Amenity, PropertyImage, Booking, Payment
 from django.contrib.auth import get_user_model
 from datetime import date
 
