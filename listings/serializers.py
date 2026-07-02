@@ -1,9 +1,42 @@
 from rest_framework import serializers
-from .models import Listing, PropertyAddress, PropertyOffers, PropertyDescription, Amenity, PropertyImage, Booking, Payment
+from .models import Listing, PropertyAddress, PropertyOffer, PropertyDescription, Amenity, PropertyImage, Review, Booking, Payment
 from django.contrib.auth import get_user_model
 from datetime import date
 
 User = get_user_model()
+
+class AmenitySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Amenity
+        fields = '__all__'
+
+class PropertyImageSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PropertyImage
+        fields = '__all__'
+
+class PropertyAddressSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PropertyAddress
+        fields = ['state', 'city', 'country']
+
+class PropertyOfferSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PropertyOffer
+        fields = ['bed', 'shower', 'occupants']
+
+class PropertyDescriptionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PropertyDescription
+        fields = ['title', 'space', 'offer', 'host']
+
+class ReviewSerializer(serializers.ModelSerializer):
+    user = serializers.PrimaryKeyRelatedField(read_only=True)
+    property = serializers.PrimaryKeyRelatedField(queryset=Listing.objects.all())
+
+    class Meta:
+        model = Review
+        fields = '__all__'
 
 class BookingSerializer(serializers.ModelSerializer):
     property = serializers.PrimaryKeyRelatedField(queryset=Listing.objects.all())
@@ -30,6 +63,12 @@ class BookingSerializer(serializers.ModelSerializer):
 
 class ListingSerializer(serializers.ModelSerializer):
     host = serializers.PrimaryKeyRelatedField(read_only=True)
+    address = PropertyAddressSerializer()
+    offers = PropertyOfferSerializer()
+    description = PropertyDescriptionSerializer()
+    category = serializers.SlugRelatedField(Many=True, read_only=True, slug_field="name", source="categories")
+    categories_input = serializers.ListField(child=serializers.CharField(), write_only=True, required=False)
+    reviews = ReviewSerializer()
     bookings = BookingSerializer(many=True, read_only=True)
     created_at = serializers.DateTimeField(format='%Y-%m-%dT%H:%M:%S', read_only=True)
     created_at = serializers.DateTimeField(format='%Y-%m-%dT%H:%M:%S', read_only=True)

@@ -41,7 +41,7 @@ class PropertyImage(models.Model):
     """
     image_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     property = models.ForeignKey(Listing, on_delete=models.CASCADE, related_name='images')
-    image_url = models.CharField(max_length=500)
+    image = models.ImageField(upload_to="listing_images")
     
     # Flag to determine which image is the main dashboard thumbnail vs. detail gallery
     is_main = models.BooleanField(default=False)
@@ -56,7 +56,7 @@ class PropertyAddress(models.Model):
     country = models.CharField(max_length=100)
 
 
-class PropertyOffers(models.Model):
+class PropertyOffer(models.Model):
     property = models.OneToOneField(Listing, on_delete=models.CASCADE, related_name='offers')
     bed = models.IntegerField()
     shower = models.IntegerField()
@@ -70,7 +70,7 @@ class PropertyDescription(models.Model):
     offer = models.TextField(blank=True, null=True)
     host = models.TextField(blank=True, null=True)
 
-class Reviews(models.Model):
+class Review(models.Model):
     review_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     property = models.ForeignKey(Listing, on_delete=models.CASCADE, related_name='property_reviews')
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='user_reviews')
