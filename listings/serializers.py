@@ -1,9 +1,11 @@
+import inflect
 from rest_framework import serializers
 from .models import Listing, PropertyAddress, PropertyOffer, PropertyDescription, Amenity, PropertyImage, Review, Booking, Payment
 from django.contrib.auth import get_user_model
 from datetime import date
 
 User = get_user_model()
+p = inflect.engine()
 
 class AmenitySerializer(serializers.ModelSerializer):
     class Meta:
@@ -11,6 +13,7 @@ class AmenitySerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 class PropertyImageSerializer(serializers.ModelSerializer):
+    property = serializers.PrimaryKeyRelatedField(read_only=True)
     class Meta:
         model = PropertyImage
         fields = '__all__'
@@ -33,6 +36,7 @@ class PropertyDescriptionSerializer(serializers.ModelSerializer):
 class ReviewSerializer(serializers.ModelSerializer):
     user = serializers.PrimaryKeyRelatedField(read_only=True)
     property = serializers.PrimaryKeyRelatedField(queryset=Listing.objects.all())
+    created_at = serializers.DateTimeField(format='%Y-%m-%dT%H:%M:%S', read_only=True)
 
     class Meta:
         model = Review
@@ -68,14 +72,37 @@ class ListingSerializer(serializers.ModelSerializer):
     description = PropertyDescriptionSerializer()
     category = serializers.SlugRelatedField(Many=True, read_only=True, slug_field="name", source="categories")
     categories_input = serializers.ListField(child=serializers.CharField(), write_only=True, required=False)
-    reviews = ReviewSerializer()
+    images = PropertyImageSerializer(many=True, read_only=True)
+    reviews = ReviewSerializer(many=True, read_only=True)
     bookings = BookingSerializer(many=True, read_only=True)
     created_at = serializers.DateTimeField(format='%Y-%m-%dT%H:%M:%S', read_only=True)
-    created_at = serializers.DateTimeField(format='%Y-%m-%dT%H:%M:%S', read_only=True)
+    updated_at = serializers.DateTimeField(format='%Y-%m-%dT%H:%M:%S', read_only=True)
 
     class Meta:
         model = Listing
         fields = '__all__'
+    
+    def create(self, validateed_data):
+        address_data = validated_data.pop('address')
+        offers_data = validated_data.pop('offers')
+        description_data = validated_data.pop('description')
+        category_names = validated_data.pop('categories_input', [])
+
+        listing = Listing.objects.create(**validated_data)
+
+        PropertyAddress.objects.create(property=listing, **address_data)
+        PropertyOffer.objects.create(property=listing, **offers_data)
+        PropertyDescription.objects.create(property=listing, **description_data)
+
+        for name in category_names:
+            cleaned = name.strip()
+            singular_name = p.singular_noun(cleaned)
+            normalized = singular_name.title() if singular_name else cleaned.title()
+            amenity, _ = Amenity.objects.get_or_create(name=normalized)
+            listing.categories.add(amenity)
+            
+        return listing
+
 
 class PaymentSerializer(serializers.ModelSerializer):
     class Meta:
