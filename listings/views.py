@@ -3,14 +3,16 @@ from rest_framework import filters, status, views, viewsets
 from rest_framework.response import Response
 from .permissions import IsAuthenticatedIsOwnerOrReadOnlyListing, IsAuthenticatedIsOwnerBooking
 from django.contrib.auth import get_user_model
-from .serializers import BookingSerializer, ListingSerializer, PaymentSerializer
+from django.db import transaction, IntegrityError
+from .serializers import BookingSerializer, ListingSerializer, PaymentSerializer, PropertyImageSerializer, ReviewSerializer 
 from .models import Booking, Listing
 from django_filters.rest_framework import DjangoFilterBackend
 from .pagination import StandardResultsSetPagination
 import uuid, requests, os
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
-from .models import Payment, Booking
+from rest_framework.parsers import MultiPartParser, FormParser
+from .models import Payment, Booking, PropertyImage
 from .serializers import PaymentSerializer
 from .tasks import send_payment_confirmation_email, send_booking_confirmation_email
 from drf_yasg.utils import swagger_auto_schema
@@ -95,14 +97,15 @@ class BookingViewSet(viewsets.ModelViewSet):
 
 # Listing view
 class ListingViewSet(viewsets.ModelViewSet):
-    queryset = Listing.objects.all()
+    # Performance optimization: prefetch single image layout along with one-to-one relations
+    queryset = Listing.objects.all().select_related('address', 'offers', 'description', 'host').prefetch_related('categories', 'images')
     serializer_class = ListingSerializer
     permission_classes = [IsAuthenticatedIsOwnerOrReadOnlyListing]
     pagination_class = StandardResultsSetPagination
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_fields = ["name", "description", "location", "pricepernight", "created_at"]
-    search_fields =  ["name", "description", "location", "pricepernight", "created_at"]
-    ordering_fields =  ["name", "description", "location", "pricepernight", "created_at"]
+    filterset_fields = ["name", "pricepernight", "address__city", "address__country"]
+    search_fields = ["name", "address__city", "address__country", "description__title"]
+    ordering_fields = ["name", "pricepernight", "created_at"]
     ordering = ["name"]
 
     def perform_create(self, serializer):
@@ -149,6 +152,142 @@ class ListingViewSet(viewsets.ModelViewSet):
     )
     def destroy(self, request, *args, **kwargs):
         return super().destroy(request, *args, **kwargs)
+
+    # --- ACTION ENDPOINT FOR UPLOADING PROPERTY IMAGES ---
+    # Target: POST /api/listings/{id}/upload_image/
+    @swagger_auto_schema(operation_summary="Upload property gallery image")
+    @action(detail=True, methods=['post'], parser_classes=[MultiPartParser, FormParser], url_path='upload_image')
+    def upload_image(self, request, pk=None):
+        listing = self.get_object()
+        is_main_image = not listing.images.exist()
+        
+        if listing.host != request.user:
+            return Response({"detail": "Only the host can add photos to this property."}, status=status.HTTP_403_FORBIDDEN)
+        
+        serializer = PropertyImageSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            with transaction.atomic():
+                locked_listing = Listing.objects.select_for_update().get(pk=listing.pk)
+                is_first_image = not locked_listing.images.exists()
+                is_main_input = str(request.data.get("is_main", "false")).lower() in ['true', '1']
+                final_is_main = is_first_image or is_main_input
+
+                if final_is_main:
+                    locked_listing.images.filter(is_main=True).update(is_main=False)
+
+                serializer.save(property=locked_listing, is_main=final_is_main)
+
+        except Listing.DoesNotExist:
+            return Response(
+                {"detail": "Property no longer exists."}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        except IntegrityError:
+            return Response(
+                {"detail": "A main image for this property was updated concurrently. Please try again."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        except (IOError, OSError) as e:
+            logger.error(f"Image storage upload failed for listing {listing.pk}: {str(e)}")
+
+            return Response(
+                {"detail": "Failed to store image file. Please try again later."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        return Response({"detail": "Image uploaded successfully."}, status=status.HTTP_201_CREATED)    
+
+    # Target: PATCH /api/listings/{id}/set_main_image/
+    @action(detail=True, methods=['patch'], url_path='set_main_image')
+    def set_main_image(self, request, pk=None):
+        listing = self.get_object()
+        new_image_id = request.data.get('image_id')
+
+        if not new_image_id:
+            return Response(
+                {"error": "image_id is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        
+        try:
+            # The atomic block ensures both database changes succeed, or both roll back
+            with transaction.atomic():
+                # Clear any existing main images for this listing
+                listing.images.filter(is_main=True).update(is_main=False)
+
+                # Get the target image and set it as the new main image
+                # Using select_for_update() locks the row until the transaction finishes
+                new_main_image = listing.images.select_for_update().get(
+                    pk=new_image_id
+                )
+                new_main_image.is_main = True
+                new_main_image.save()
+        
+            return Response({"detail": "Main dashboard thumbnail updated successfully."}, status=status.HTTP_200_OK)
+        except PropertyImage.DoesNotExist:
+            return Response({"error": "Image not found on this listing."}, status=status.HTTP_404_NOT_FOUND)
+
+    # --- DELETE INDIVIDUAL GALLERY IMAGE ---
+    # Target: DELETE /api/listings/{id}/delete_image/
+    @action(detail=True, methods=['delete'], url_path='delete_image')
+    def delete_image(self, request, pk=None):
+        listing = self.get_object()
+        image_id = request.data.get('image_id')
+
+        if not image_id:
+            return Response(
+                {"error": "image_id is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        
+        try:
+            target_image = listing.images.get(pk=image_id)
+        except PropertyImage.DoesNotExist:
+            return Response({"detail": "Image not found on this listing."}, status=status.HTTP_404_NOT_FOUND)
+            
+        # Block if they are trying to delete the absolute last image
+        if listing.images.count() <= 1:
+            return Response(
+                {"detail": "A listing must have at least one image remaining."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Block if they delete the main image while other choices exist
+        if target_image.is_main:
+            return Response(
+                {"detail": "Please assign a new main thumbnail before deleting this image."}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )  
+
+        # Delete from your storage file graph and MySQL table rows
+        target_image.image.delete(save=False) # Removes file asset from disk/S3
+        target_image.delete()     
+
+    # --- ACTION ENDPOINT FOR FETCHING/CREATING PROPERTY REVIEWS ---
+    # Target: GET or POST /api/listings/{id}/reviews/
+    @action(detail=True, methods=['get', 'post'], url_path='reviews')
+    def reviews(self, request, pk=None):
+        listing = self.get_object()
+
+        if request.method == 'GET':
+            reviews = listing.property_reviews.all().select_related('user')
+            serializer = ReviewSerializer(reviews, many=True)
+            return Response(serializer.data)
+
+        if request.method == 'POST':
+            if not request.user.is_authenticated:
+                return Response({"detail": "Authentication required to leave feedback."}, status=status.HTTP_401_UNAUTHORIZED)
+            
+            serializer = ReviewSerializer(data=request.data)
+            if serializer.is_valid():
+                serializer.save(user=request.user, property=listing)
+                return Response(serializer.data, status=status.HTTP_201_CREATED)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class InitiatePaymentView(views.APIView):
     permission_classes = [IsAuthenticated]

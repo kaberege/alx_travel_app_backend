@@ -46,6 +46,15 @@ class PropertyImage(models.Model):
     # Flag to determine which image is the main dashboard thumbnail vs. detail gallery
     is_main = models.BooleanField(default=False)
 
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['property'],
+                condition=models.Q(is_main=True),
+                name='unique_main_image_per_property'
+            )
+        ]
+
     def __str__(self):
         return f"Image for {self.property.name} ({'Main' if self.is_main else 'Detail'})"
 
