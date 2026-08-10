@@ -53,15 +53,31 @@ class BookingSerializer(serializers.ModelSerializer):
         model = Booking
         fields = '__all__'
 
-    def validate(self, data):
-        if data['start_date'] < date.today():
-            raise serializers.ValidationError("Start date cannot be in the past!")
+   def validate(self, data):
+        start_date = data.get('start_date')
+        end_date = data.get('end_date')
+        target_property = data.get('property')
 
-        if data['end_date'] < date.today():
-            raise serializers.ValidationError("End date cannot be in the past!")
+        if start_date < date.today():
+            raise serializers.ValidationError({"start_date": "Start date cannot be in the past!"})
 
-        if data['end_date'] < data['start_date']:
-            raise serializers.ValidationError("End date cannot be less than start date!")
+        if end_date <= start_date:
+            raise serializers.ValidationError({"end_date": "End date must be strictly after start date!"})
+
+        # --- Overlapping Booking Safeguard ---
+        overlapping_bookings = Booking.objects.filter(
+            property=target_property,
+            status__in=['pending', 'confirmed'],
+            start_date__lt=end_date,
+            end_date__gt=start_date
+        )
+
+        # Exclude current booking instance if updating
+        if self.instance:
+            overlapping_bookings = overlapping_bookings.exclude(pk=self.instance.pk)
+
+        if overlapping_bookings.exists():
+            raise serializers.ValidationError({"non_field_errors": "This property is already reserved for the selected dates."})
 
         return data
 
@@ -70,7 +86,7 @@ class ListingSerializer(serializers.ModelSerializer):
     address = PropertyAddressSerializer()
     offers = PropertyOfferSerializer()
     description = PropertyDescriptionSerializer()
-    category = serializers.SlugRelatedField(Many=True, read_only=True, slug_field="name", source="categories")
+    category = serializers.SlugRelatedField(many=True, read_only=True, slug_field="name", source="categories")
     categories_input = serializers.ListField(child=serializers.CharField(), write_only=True, required=False)
     images = PropertyImageSerializer(many=True, read_only=True)
     reviews = ReviewSerializer(many=True, read_only=True)
@@ -82,7 +98,7 @@ class ListingSerializer(serializers.ModelSerializer):
         model = Listing
         fields = '__all__'
     
-    def create(self, validateed_data):
+    def create(self, validated_data):
         address_data = validated_data.pop('address')
         offers_data = validated_data.pop('offers')
         description_data = validated_data.pop('description')
