@@ -1,8 +1,11 @@
 import inflect
-from rest_framework import serializers
-from .models import Listing, PropertyAddress, PropertyOffer, PropertyDescription, Amenity, PropertyImage, Review, Booking, Payment
-from django.contrib.auth import get_user_model
 from datetime import date
+from rest_framework import serializers
+from django.contrib.auth import get_user_model
+from .models import (
+    Listing, PropertyAddress, PropertyOffer, PropertyDescription, 
+    Amenity, PropertyImage, Review, Booking, Payment
+)
 
 User = get_user_model()
 p = inflect.engine()

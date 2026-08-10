@@ -1,47 +1,50 @@
-from django.shortcuts import get_object_or_404
+import os
+import uuid
+import logging
+import requests
+from django.db import transaction, IntegrityError
+from django.contrib.auth import get_user_model
+from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters, status, views, viewsets
 from rest_framework.response import Response
-from .permissions import IsAuthenticatedIsOwnerOrReadOnlyListing, IsAuthenticatedIsOwnerBooking
-from django.contrib.auth import get_user_model
-from django.db import transaction, IntegrityError
-from .serializers import BookingSerializer, ListingSerializer, PaymentSerializer, PropertyImageSerializer, ReviewSerializer 
-from .models import Booking, Listing
-from django_filters.rest_framework import DjangoFilterBackend
-from .pagination import StandardResultsSetPagination
-import uuid, requests, os
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.parsers import MultiPartParser, FormParser
-from .models import Payment, Booking, PropertyImage
-from .serializers import PaymentSerializer
-from .tasks import send_payment_confirmation_email, send_booking_confirmation_email
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
-import logging
+
+from .models import Booking, Listing, Payment, PropertyImage, Review
+from .serializers import (
+    BookingSerializer, ListingSerializer, PaymentSerializer,
+    PropertyImageSerializer, ReviewSerializer
+)
+from .permissions import IsHostOrReadOnly, IsBookingOwnerOrHost, IsReviewAuthorOrReadOnly
+from .pagination import StandardResultsSetPagination
+from .tasks import send_payment_confirmation_email, send_booking_confirmation_email
 
 logger = logging.getLogger(__name__)
-
 CHAPA_SECRET_KEY = os.environ.get('CHAPA_SECRET_KEY')
+User = get_user_model()
 
-User = get_user_model()  # Custom user model
-
-# Booking view
 class BookingViewSet(viewsets.ModelViewSet):
+    """ViewSet for managing guest bookings."""
     serializer_class = BookingSerializer
-    permission_classes = [IsAuthenticatedIsOwnerBooking]
+    permission_classes = [IsBookingOwnerOrHost]
     pagination_class = StandardResultsSetPagination
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_fields = ["property", "start_date", "end_date", "total_price", "status", "created_at"]
-    search_fields = ["property", "start_date", "end_date", "total_price", "status", "created_at"]
-    ordering_fields = ["property", "start_date", "end_date", "total_price", "status", "created_at"]
-    ordering = ["property"]
+    filterset_fields = ["property", "start_date", "end_date", "status"]
+    search_fields = ["property__name", "status"]
+    ordering_fields = ["start_date", "created_at", "total_price"]
+    ordering = ["-created_at"]
 
     def get_queryset(self):
-        # Short-circuit for Swagger schema generation
         if getattr(self, 'swagger_fake_view', False):
             return Booking.objects.none()
-            
-        return Booking.objects.filter(user=self.request.user)
+        user = self.request.user
+        if user.is_staff:
+            return Booking.objects.all()
+        # Guests see their own bookings; Hosts see bookings for their properties
+        return Booking.objects.filter(user=user) | Booking.objects.filter(property__host=user)
 
     def perform_create(self, serializer):
         booking = serializer.save(user=self.request.user)
@@ -54,45 +57,47 @@ class BookingViewSet(viewsets.ModelViewSet):
         )
 
     @swagger_auto_schema(
-        operation_summary="List user's bookings",
+        operation_summary="List user/host bookings",
         operation_description="Retrieve a list of all bookings made by the authenticated user."
     )
     def list(self, request, *args, **kwargs):
         return super().list(request, *args, **kwargs)
 
     @swagger_auto_schema(
-        operation_summary="Create a booking",
+        operation_summary="Create a new property booking",
         operation_description="Create a new booking for a property. The booking will be associated with the authenticated user."
     )
     def create(self, request, *args, **kwargs):
         return super().create(request, *args, **kwargs)
 
     @swagger_auto_schema(
-        operation_summary="Retrieve a booking",
+        operation_summary="Retrieve booking details",
         operation_description="Retrieve details of a specific booking made by the authenticated user."
     )
     def retrieve(self, request, *args, **kwargs):
         return super().retrieve(request, *args, **kwargs)
 
     @swagger_auto_schema(
-        operation_summary="Update a booking",
+        operation_summary="Update booking details",
         operation_description="Update all details of an existing booking. Only the booking owner can perform this action."
     )
     def update(self, request, *args, **kwargs):
         return super().update(request, *args, **kwargs)
 
     @swagger_auto_schema(
-        operation_summary="Partially update a booking",
+        operation_summary="Partially update booking details",
         operation_description="Update one or more fields of an existing booking. Only the booking owner can perform this action."
     )
     def partial_update(self, request, *args, **kwargs):
         return super().partial_update(request, *args, **kwargs)
 
     @swagger_auto_schema(
-        operation_summary="Cancel a booking",
+        operation_summary="Cancel/Delete a booking",
         operation_description="Delete (cancel) an existing booking. Only the booking owner can perform this action."
     )
     def destroy(self, request, *args, **kwargs):
+        booking = self.get_object()
+        logger.warning(f"Booking {booking.booking_id} was canceled by User {request.user.pk}")
         return super().destroy(request, *args, **kwargs)
 
 # Listing view
