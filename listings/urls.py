@@ -9,5 +9,5 @@ router.register(r'listings', ListingViewSet, basename='listing')
 urlpatterns = [
     path('', include(router.urls)),
     path('payments/<str:booking_id>/initiate/', InitiatePaymentView.as_view(), name="initiate"),
-    path('payments/verify/<str:tx_ref>/', VerifyPaymentView.as_view(), name="verify")
+    path('payments/verify/', VerifyPaymentView.as_view(), name="verify")
 ]

@@ -100,21 +100,21 @@ class BookingViewSet(viewsets.ModelViewSet):
         logger.warning(f"Booking {booking.booking_id} was canceled by User {request.user.pk}")
         return super().destroy(request, *args, **kwargs)
 
-# Listing view
 class ListingViewSet(viewsets.ModelViewSet):
-    # Performance optimization: prefetch single image layout along with one-to-one relations
+    """ViewSet for managing property listings and their assets."""
     queryset = Listing.objects.all().select_related('address', 'offers', 'description', 'host').prefetch_related('categories', 'images')
     serializer_class = ListingSerializer
-    permission_classes = [IsAuthenticatedIsOwnerOrReadOnlyListing]
+    permission_classes = [IsHostOrReadOnly]
     pagination_class = StandardResultsSetPagination
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_fields = ["name", "pricepernight", "address__city", "address__country"]
+    filterset_fields = ["name", "price_per_night", "address__city", "address__country"]
     search_fields = ["name", "address__city", "address__country", "description__title"]
-    ordering_fields = ["name", "pricepernight", "created_at"]
-    ordering = ["name"]
+    ordering_fields = ["name", "price_per_night", "created_at"]
+    ordering = ["-created_at"]
 
     def perform_create(self, serializer):
-        serializer.save(host=self.request.user)
+        listing = serializer.save(host=self.request.user)
+        logger.info(f"New listing '{listing.name}' ({listing.pk}) created by Host {self.request.user.pk}")
 
     @swagger_auto_schema(
         operation_summary="List all properties",
@@ -160,11 +160,15 @@ class ListingViewSet(viewsets.ModelViewSet):
 
     # --- ACTION ENDPOINT FOR UPLOADING PROPERTY IMAGES ---
     # Target: POST /api/listings/{id}/upload_image/
-    @swagger_auto_schema(operation_summary="Upload property gallery image")
+    @swagger_auto_schema(
+        operation_summary="Upload property gallery image",
+        request_body=PropertyImageSerializer,
+        responses={201: PropertyImageSerializer(), 400: "Invalid payload/file format", 403: "Not listing owner"}
+    )
     @action(detail=True, methods=['post'], parser_classes=[MultiPartParser, FormParser], url_path='upload_image')
     def upload_image(self, request, pk=None):
         listing = self.get_object()
-        is_main_image = not listing.images.exist()
+        is_main_image = not listing.images.exists()
         
         if listing.host != request.user:
             return Response({"detail": "Only the host can add photos to this property."}, status=status.HTTP_403_FORBIDDEN)
@@ -183,7 +187,9 @@ class ListingViewSet(viewsets.ModelViewSet):
                 if final_is_main:
                     locked_listing.images.filter(is_main=True).update(is_main=False)
 
-                serializer.save(property=locked_listing, is_main=final_is_main)
+                image_instance = serializer.save(property=locked_listing, is_main=final_is_main)
+                logger.info(f"Uploaded image {image_instance.pk} for Listing {listing.pk}")
+            return Response(PropertyImageSerializer(image_instance).data, status=status.HTTP_201_CREATED)    
 
         except Listing.DoesNotExist:
             return Response(
@@ -198,16 +204,23 @@ class ListingViewSet(viewsets.ModelViewSet):
             )
 
         except (IOError, OSError) as e:
-            logger.error(f"Image storage upload failed for listing {listing.pk}: {str(e)}")
+            logger.error(f"File storage write error for listing {listing.pk}: {str(e)}")
 
             return Response(
                 {"detail": "Failed to store image file. Please try again later."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
-        return Response({"detail": "Image uploaded successfully."}, status=status.HTTP_201_CREATED)    
-
     # Target: PATCH /api/listings/{id}/set_main_image/
+    @swagger_auto_schema(
+        operation_summary="Set main dashboard thumbnail",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=['image_id'],
+            properties={'image_id': openapi.Schema(type=openapi.TYPE_STRING, description="UUID of target image")}
+        ),
+        responses={200: "Main image updated", 404: "Image not found"}
+    )
     @action(detail=True, methods=['patch'], url_path='set_main_image')
     def set_main_image(self, request, pk=None):
         listing = self.get_object()
@@ -239,6 +252,15 @@ class ListingViewSet(viewsets.ModelViewSet):
 
     # --- DELETE INDIVIDUAL GALLERY IMAGE ---
     # Target: DELETE /api/listings/{id}/delete_image/
+    @swagger_auto_schema(
+        operation_summary="Delete individual gallery image",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=['image_id'],
+            properties={'image_id': openapi.Schema(type=openapi.TYPE_STRING)}
+        ),
+        responses={200: "Deleted successfully", 400: "Cannot delete final or main image"}
+    )
     @action(detail=True, methods=['delete'], url_path='delete_image')
     def delete_image(self, request, pk=None):
         listing = self.get_object()
@@ -271,10 +293,16 @@ class ListingViewSet(viewsets.ModelViewSet):
 
         # Delete from your storage file graph and MySQL table rows
         target_image.image.delete(save=False) # Removes file asset from disk/S3
-        target_image.delete()     
+        target_image.delete()
+        logger.info(f"Image {image_id} removed from listing {listing.pk}")
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     # --- ACTION ENDPOINT FOR FETCHING/CREATING PROPERTY REVIEWS ---
     # Target: GET or POST /api/listings/{id}/reviews/
+    @swagger_auto_schema(
+        operation_summary="Fetch or submit property reviews",
+        responses={200: ReviewSerializer(many=True), 201: ReviewSerializer()}
+    )
     @action(detail=True, methods=['get', 'post'], url_path='reviews')
     def reviews(self, request, pk=None):
         listing = self.get_object()
@@ -295,10 +323,11 @@ class ListingViewSet(viewsets.ModelViewSet):
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class InitiatePaymentView(views.APIView):
+    """Initiates transaction payment flow via Chapa API."""
     permission_classes = [IsAuthenticated]
 
     @swagger_auto_schema(
-        operation_summary="Initiate a payment",
+        operation_summary="Initiate payment transaction",
         operation_description="Initialize a payment for a specific booking. Returns a checkout URL and tx_ref.",
         responses={
             200: openapi.Response(
@@ -329,7 +358,7 @@ class InitiatePaymentView(views.APIView):
             "first_name": request.user.first_name,
             "last_name": request.user.last_name,
             "tx_ref": tx_ref,
-            "callback_url": request.build_absolute_uri(f'/api/payments/verify/{tx_ref}/'),
+            "callback_url": request.build_absolute_uri(f'/api/payments/verify/'),
             "return_url": "https://kaberege-portfolio.vercel.app/",
             "customization": {
                 "title": "Booking Payment",
@@ -350,7 +379,8 @@ class InitiatePaymentView(views.APIView):
             )
             data = chapa_response.json()
         except Exception as e:
-            return Response({"error": f"Payment failed: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+            logger.error(f"Chapa Connection Error: {str(e)}")
+            return Response({"error": f"Payment gateway initialization failed: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         if chapa_response.status_code == 200 and data.get('status') == 'success':
             try:
@@ -365,68 +395,93 @@ class InitiatePaymentView(views.APIView):
                     "tx_ref": tx_ref
                 })
             except Exception as e:
+                logger.error(f"Failed to record Payment model row: {str(e)}")
                 return Response({"error": f"Failed to record payment in system: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         else:
             return Response(data, status=status.HTTP_400_BAD_REQUEST)
     
 class VerifyPaymentView(views.APIView):
+    """Verifies payment transaction status with Chapa."""
     @swagger_auto_schema(
-        operation_summary="Verify payment",
-        operation_description="Verify the status of a payment by tx_ref. Returns payment status and Chapa response.",
+        operation_summary="Verify Chapa Payment Callback",
+        operation_description="Callback handler for Chapa payment verification.",
         manual_parameters=[
-            openapi.Parameter("tx_ref", openapi.IN_PATH, description="Transaction reference to verify", type=openapi.TYPE_STRING)
+            openapi.Parameter("trx_ref", openapi.IN_QUERY, description="Unique transaction reference", type=openapi.TYPE_STRING, required=True),
+            openapi.Parameter("ref_id", openapi.IN_QUERY, description="Chapa tracking ID", type=openapi.TYPE_STRING, required=False),
+            openapi.Parameter("status", openapi.IN_QUERY, description="Status sent by Chapa", type=openapi.TYPE_STRING, required=False),
         ],
         responses={
             200: openapi.Response(
-                description="Payment verification result",
-                examples={
-                    "application/json": {
-                        "status": "completed",
-                        "chapa_response": {"status": "success", "data": {}}
-                    }
-                }
+                description="Payment verified successfully",
+                examples={"application/json": {"status": "completed", "message": "Payment verified successfully."}}
             ),
-            404: "Payment not found",
-            400: "Verification failed"
+            400: "Missing required parameters or payment failed",
+            404: "Transaction record not found"
         }
-    )    
-    def get(self, request, tx_ref=None):
+    )
+    def get(self, request):
         # callback_url recive a GET request with a JSON payload
-        callback_url_trx_ref = request.GET.get("trx_ref")
-        callback_url_ref_id = request.GET.get("ref_id")
-        callback_url_chapa_status = request.GET.get("status")
+        trx_ref = request.query_params.get('trx_ref') or request.data.get('trx_ref')
+        ref_id = request.query_params.get('ref_id') or request.data.get('ref_id')
+        cb_status = request.query_params.get('status') or request.data.get('status')
+
+        if not trx_ref:
+            return Response({'error': 'trx_ref is required.'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            payment = Payment.objects.get(tx_ref=tx_ref)
-            
-            if callback_url_ref_id and callback_url_trx_ref == tx_ref and callback_url_chapa_status == "success":
-                payment.chapa_transaction_id = callback_url_ref_id 
-                payment.save()
-
+            payment = Payment.objects.select_for_update().select_related('booking').get(tx_ref=trx_ref)
         except Payment.DoesNotExist:
-            return Response({'error': 'Payment not found'}, status=status.HTTP_404_NOT_FOUND)
+            logger.error(f"Callback error: Payment with tx_ref '{trx_ref}' not found.")
+            return Response({'error': 'Payment record not found.'}, status=status.HTTP_404_NOT_FOUND)
+        
+        # Idempotency Check: Return immediately if already processed
+        if payment.status in ['completed', 'failed']:
+            return Response({
+                'status': payment.status,
+                'message': 'Transaction already processed.'
+            }, status=status.HTTP_200_OK)
 
+        chapa_url = f"https://api.chapa.co/v1/transaction/verify/{trx_ref}"
         headers = {"Authorization": f"Bearer {CHAPA_SECRET_KEY}"}
-        try:
-            response = requests.get(
-                f"https://api.chapa.co/v1/transaction/verify/{tx_ref}",
-                headers=headers
-            ) 
-            data = response.json()
-        except Exception as e:
-            return Response({"error": f"Failed to verify payment in system: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        if data.get('status') == 'success':
-            chapa_status = data['data']['status']
-            payment.status = 'completed' if chapa_status == 'success' else 'failed'
+        try:
+            chapa_response = requests.get(chapa_url, headers=headers, timeout=10)
+            res_data = chapa_response.json()
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Chapa API verification request failed: {str(e)}")
+            return Response({'error': 'Failed to connect to gateway.'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        # Confirm verification status from server-to-server check
+        api_status = res_data.get('status')
+        inner_data = res_data.get('data', {}) or {}
+        tx_status = inner_data.get('status')
+
+        is_verified = (chapa_response.status_code == 200) and (api_status == 'success') and (tx_status == 'success')
+
+        with transaction.atomic():
+            if is_verified:
+                payment.status = 'completed'
+                payment.booking.status = 'confirmed'
+                payment.chapa_transaction_id = ref_id or inner_data.get('reference')
+            else:
+                payment.status = 'failed'
+                payment.booking.status = 'canceled'
+
+            payment.booking.save()
             payment.save()
 
-            if payment.status == 'completed':
-                send_payment_confirmation_email.delay(
-                    payment.booking.user.email,
-                    str(payment.payment_id)
-                )
+        if is_verified:
+            send_payment_confirmation_email.delay(
+                payment.booking.user.email,
+                str(payment.payment_id)
+            )
+            return Response({
+                'status': 'completed',
+                'message': 'Payment verified and booking confirmed.'
+            }, status=status.HTTP_200_OK)
 
-            return Response({"status": payment.status, "chapa_response": data})
-        else:
-            return Response(data, status=status.HTTP_400_BAD_REQUEST)
+        return Response({
+            'status': 'failed',
+            'message': 'Payment verification failed.',
+            'details': res_data
+        }, status=status.HTTP_400_BAD_REQUEST)
