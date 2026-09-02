@@ -300,8 +300,15 @@ class ListingViewSet(viewsets.ModelViewSet):
     # --- ACTION ENDPOINT FOR FETCHING/CREATING PROPERTY REVIEWS ---
     # Target: GET or POST /api/listings/{id}/reviews/
     @swagger_auto_schema(
-        operation_summary="Fetch or submit property reviews",
-        responses={200: ReviewSerializer(many=True), 201: ReviewSerializer()}
+        method='get',
+        operation_summary="Fetch property reviews",
+        responses={200: ReviewSerializer(many=True)}
+    )
+    @swagger_auto_schema(
+        method='post',
+        operation_summary="Submit a property review",
+        request_body=ReviewSerializer,
+        responses={201: ReviewSerializer(), 400: "Invalid input", 401: "Unauthorized"}
     )
     @action(detail=True, methods=['get', 'post'], url_path='reviews')
     def reviews(self, request, pk=None):
