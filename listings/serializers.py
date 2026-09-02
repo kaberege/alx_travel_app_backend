@@ -56,7 +56,7 @@ class BookingSerializer(serializers.ModelSerializer):
         model = Booking
         fields = '__all__'
 
-   def validate(self, data):
+    def validate(self, data):
         start_date = data.get('start_date')
         end_date = data.get('end_date')
         target_property = data.get('property')
