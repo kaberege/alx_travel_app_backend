@@ -2,7 +2,9 @@ import os
 import uuid
 import logging
 import requests
+from datetime import datetime
 from django.db import transaction, IntegrityError
+from django.db.models import Q
 from django.contrib.auth import get_user_model
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters, status, views, viewsets
@@ -109,8 +111,43 @@ class ListingViewSet(viewsets.ModelViewSet):
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ["name", "price_per_night", "address__city", "address__country"]
     search_fields = ["name", "address__city", "address__country", "description__title"]
-    ordering_fields = ["name", "price_per_night", "created_at"]
+    ordering_fields = ["name", "price_per_night", "average_rating", "created_at"]
     ordering = ["-created_at"]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+
+        check_in = self.request.query_params.get('check_in')
+        check_out = self.request.query_params.get('check_out')
+        guests = self.request.query_params.get('guests')
+        category = self.request.query_params.get('category')
+
+        if check_in and check_out:
+            try:
+                # Ensure valid ISO date format
+                c_in = datetime.strptime(check_in, "%Y-%m-%d").date()
+                c_out = datetime.strptime(check_out, "%Y-%m-%d").date()
+
+                booked_listing_ids = Booking.objects.filter(
+                    Q(start_date__lt=c_out) & Q(end_date__gt=c_in),
+                    status__in=['confirmed', 'pending']
+                ).values_list('property_id', flat=True)
+
+                queryset = queryset.exclude(property_id__in=booked_listing_ids)
+            except ValueError:
+                pass  # Ignore invalid date input formats gracefully
+
+        if guests and guests.isdigit():
+            guests_count = int(guests)
+            queryset = queryset.filter(
+                offers__min_occupants__lte=guests_count,
+                offers__max_occupants__gte=guests_count
+            )
+
+        if category and category.lower() != 'all':
+            queryset = queryset.filter(categories__name__iexact=category).distinct()
+
+        return queryset
 
     def perform_create(self, serializer):
         listing = serializer.save(host=self.request.user)

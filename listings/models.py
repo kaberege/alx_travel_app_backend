@@ -67,9 +67,16 @@ class PropertyAddress(models.Model):
 
 class PropertyOffer(models.Model):
     property = models.OneToOneField(Listing, on_delete=models.CASCADE, related_name='offers')
-    bed = models.IntegerField()
-    shower = models.IntegerField()
-    occupants = models.CharField(max_length=50)
+    bed = models.PositiveIntegerField()
+    shower = models.PositiveIntegerField()
+    min_occupants = models.PositiveIntegerField(null=True, blank=True)
+    max_occupants = models.PositiveIntegerField()
+
+    def save(self, *args, **kwargs):
+        # If min isn't set, default it to max_occupants
+        if self.min_occupants is None:
+            self.min_occupants = self.max_occupants
+        super().save(*args, **kwargs)
 
 
 class PropertyDescription(models.Model):

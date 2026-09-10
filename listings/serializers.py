@@ -27,9 +27,16 @@ class PropertyAddressSerializer(serializers.ModelSerializer):
         fields = ['state', 'city', 'country']
 
 class PropertyOfferSerializer(serializers.ModelSerializer):
+    occupants_display = serializers.SerializerMethodField()
+    
     class Meta:
         model = PropertyOffer
-        fields = ['bed', 'shower', 'occupants']
+        fields = ['bed', 'shower', 'min_occupants', 'max_occupants', 'occupants_display']
+
+    def get_occupants_display(self, obj):
+        if obj.min_occupants == obj.max_occupants or not obj.min_occupants:
+            return f"{obj.max_occupants}"
+        return f"{obj.min_occupants}-{obj.max_occupants}"
 
 class PropertyDescriptionSerializer(serializers.ModelSerializer):
     class Meta:
@@ -121,7 +128,47 @@ class ListingSerializer(serializers.ModelSerializer):
             listing.categories.add(amenity)
             
         return listing
+    
+    def update(self, instance, validated_data):
+        address_data = validated_data.pop('address', None)
+        offers_data = validated_data.pop('offers', None)
+        description_data = validated_data.pop('description', None)
+        category_names = validated_data.pop('categories_input', None)
 
+        # Update root listing model fields
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+
+        # Update nested address instance
+        if address_data and hasattr(instance, 'address'):
+            for attr, value in address_data.items():
+                setattr(instance.address, attr, value)
+            instance.address.save()
+
+        # Update nested offer instance
+        if offers_data and hasattr(instance, 'offers'):
+            for attr, value in offers_data.items():
+                setattr(instance.offers, attr, value)
+            instance.offers.save()
+
+        # Update nested description instance
+        if description_data and hasattr(instance, 'description'):
+            for attr, value in description_data.items():
+                setattr(instance.description, attr, value)
+            instance.description.save()
+
+        # Handle category tag updates
+        if category_names is not None:
+            instance.categories.clear()
+            for name in category_names:
+                cleaned = name.strip()
+                singular_name = p.singular_noun(cleaned)
+                normalized = singular_name.title() if singular_name else cleaned.title()
+                amenity, _ = Amenity.objects.get_or_create(name=normalized)
+                instance.categories.add(amenity)
+
+        return instance
 
 class PaymentSerializer(serializers.ModelSerializer):
     class Meta:
