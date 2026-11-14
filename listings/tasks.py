@@ -1,7 +1,9 @@
 from celery import shared_task
+from django.utils import timezone
+from datetime import timedelta
 from django.core.mail import send_mail
 from django.conf import settings
-from .models import Payment, Booking
+from .models import Payment, Booking, Listing
 import logging
 
 logger = logging.getLogger(__name__)
@@ -94,3 +96,21 @@ def send_booking_confirmation_email(user_email, booking_id):
     )
 
     return f"Confirmation email sent to {user_email} for booking {booking_id}"
+
+@shared_task(name="cleanup_abandoned_draft_listings")
+def cleanup_abandoned_draft_listings():
+    """Deletes draft listings that have no images and were created over 24 hours ago."""
+    cutoff_time = timezone.now() - timedelta(hours=24)
+    
+    abandoned_drafts = Listing.objects.filter(
+        status='draft',
+        created_at__lt=cutoff_time,
+        images__isnull=True
+    )
+    
+    count = abandoned_drafts.count()
+    if count > 0:
+        abandoned_drafts.delete()
+        logger.info(f"Celery Task: Successfully cleaned up {count} abandoned draft listings.")
+    else:
+        logger.info("Celery Task: No abandoned draft listings found.")

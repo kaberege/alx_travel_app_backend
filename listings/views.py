@@ -150,6 +150,7 @@ class ListingViewSet(viewsets.ModelViewSet):
         return queryset
 
     def perform_create(self, serializer):
+        # status should be read only on serialization
         listing = serializer.save(host=self.request.user)
         logger.info(f"New listing '{listing.name}' ({listing.pk}) created by Host {self.request.user.pk}")
 

@@ -101,6 +101,7 @@ class ListingSerializer(serializers.ModelSerializer):
     images = PropertyImageSerializer(many=True, read_only=True)
     reviews = ReviewSerializer(many=True, read_only=True)
     bookings = BookingSerializer(many=True, read_only=True)
+    status = serializers.CharField(read_only=True)
     created_at = serializers.DateTimeField(format='%Y-%m-%dT%H:%M:%S', read_only=True)
     updated_at = serializers.DateTimeField(format='%Y-%m-%dT%H:%M:%S', read_only=True)
 

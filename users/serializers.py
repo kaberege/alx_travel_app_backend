@@ -27,28 +27,19 @@ class RegisterUserSerializer(serializers.ModelSerializer):
 
 # Serializer class for updating user profile
 class UpdateUserSerializer(serializers.ModelSerializer):
-    password = serializers.CharField(write_only=True)
     email = serializers.EmailField(read_only=True)
 
     class Meta:
         model = User
-        fields = "__all__"
+        fields = ["first_name", "last_name", "phone_number", "email"]
     
     def update(self, instance, validated_data):
-        password = validated_data.pop("password", None)
 
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
 
-        if password:
-            instance.set_password(password)
-
         instance.save()
         return instance
-
-    def validate_password(self, value):
-        if len(value) < 8:
-            raise serializers.ValidationError("password must have at least 8 charcters")
 
 # Serializer class for user login
 class LoginUserSerializer(serializers.Serializer):
@@ -82,3 +73,8 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
         logger.info(f"[Serializers] Password reset token successfully validated for user ID: {user.pk}")
         attrs['user'] = user
         return attrs
+
+        #----------Notes--------
+        - Refactor user logic for preventing defining role choices. Nb: admin
+        - password change
+        - reset confirm token blacklisting

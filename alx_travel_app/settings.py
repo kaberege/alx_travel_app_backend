@@ -14,6 +14,7 @@ from pathlib import Path
 import environ
 import os
 from datetime import timedelta
+from celery.schedules import crontab
 
 env = environ.Env(
     # set casting, default value
@@ -123,6 +124,9 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
+# Security Limits
+PASSWORD_RESET_TIMEOUT = 3600  # Password reset links expire after 1 hour (3600 seconds)
+
 
 # Internationalization
 # https://docs.djangoproject.com/en/5.2/topics/i18n/
@@ -197,6 +201,13 @@ CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'UTC'
 
+CELERY_BEAT_SCHEDULE = {
+    'cleanup-abandoned-drafts-every-night': {
+        'task': 'cleanup_abandoned_draft_listings',
+        'schedule': crontab(hour=0, minute=0), # Runs daily at 00:00
+    },
+}
+
 # Email settings
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 EMAIL_HOST = 'smtp.gmail.com'
@@ -205,6 +216,8 @@ EMAIL_PORT = 587
 EMAIL_HOST_USER = env('EMAIL_HOST_USER')
 EMAIL_HOST_PASSWORD = env('EMAIL_HOST_PASSWORD')
 DEFAULT_FROM_EMAIL = env('DEFAULT_FROM_EMAIL')
+
+FRONTEND_URL = env("FRONTEND_URL", default="http://localhost:3000")
 
 LOGGING = {
     "version": 1,

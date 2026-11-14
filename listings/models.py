@@ -17,6 +17,11 @@ class Amenity(models.Model):
 
 
 class Listing(models.Model):
+    STATUS_CHOICES = [
+        ('draft', 'Draft'),
+        ('published', 'Published')
+    ]
+
     property_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     host = models.ForeignKey(User, on_delete=models.CASCADE, related_name='hosted_properties')
     name = models.CharField(max_length=255)
@@ -26,7 +31,8 @@ class Listing(models.Model):
     
     # Many Listings can have Many Amenities (and vice-versa)
     categories = models.ManyToManyField(Amenity, related_name="listings", blank=True)
-    
+
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='draft')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

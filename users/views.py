@@ -1,9 +1,14 @@
+from django.conf import settings
 from rest_framework import status, views
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.contrib.auth import get_user_model
-from .serializers import RegisterUserSerializer, UpdateUserSerializer, LoginUserSerializer, LogoutUserSerializer
+from .serializers import RegisterUserSerializer, UpdateUserSerializer, LoginUserSerializer, LogoutUserSerializer, PasswordResetRequestSerializer, PasswordResetConfirmSerializer
+from .tasks import send_password_reset_email_task
 from rest_framework_simplejwt.tokens import RefreshToken
+from django.contrib.auth.tokens import PasswordResetTokenGenerator
+from django.utils.encoding import force_bytes
+from django.utils.http import urlsafe_base64_encode
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
 import logging
@@ -29,15 +34,16 @@ class RegisterUserView(views.APIView):
         
         # Check if the data is valid according to the serializer's validation logic
         if serializer.is_valid():
+            email = serializer.validated_data['email']
             # Save the new user to the database if the data is valid
             serializer.save()
 
-            logger.info(f"New user registered: {request.data.get('email')}")
+            logger.info(f"[Views] User registration successful for email: {email}")
 
             # Return a success message with HTTP status 201 (Created)
             return Response({"message": "User registered successfully"}, status=status.HTTP_201_CREATED)
 
-        logger.warning(f"Registration failed for email: {request.data.get('email')}. Errors: {serializer.errors}")
+        logger.warning(f"[Views] Registration failed for email: {email}. Errors: {serializer.errors}")
 
         # If the serializer data is invalid, return the validation errors with HTTP status 400 (Bad Request)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -59,7 +65,7 @@ class LoginUserView(views.APIView):
 
         # Check for data validation
         if not serializer.is_valid():
-            logger.warning(f"Login failed: Invalid data format for user: {request.data.get('email')}")
+            logger.warning(f"[Views] Login failed: Invalid data format for user: {request.data.get('email')}")
 
             return Response({"error": "Invalid email or password"}, status=status.HTTP_400_BAD_REQUEST)
     
@@ -86,11 +92,11 @@ class LoginUserView(views.APIView):
                 # Return the tokens
                 return Response({'user_data':user_data,'access': str(access_token),'refresh': str(refresh)})
             
-            logger.warning(f"Login failed: Incorrect password for user: {user_email}")
+            logger.warning(f"[Views] Login failed: Incorrect password for user: {user_email}")
             return Response({"error": "Invalid password!"}, status=status.HTTP_400_BAD_REQUEST)
 
         except User.DoesNotExist:
-            logger.warning(f"Login failed: User does not exist: {user_email}")
+            logger.warning(f"[Views] Login failed: User does not exist: {user_email}")
 
             return Response({"error": "Invalid email!"}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -108,17 +114,16 @@ class UpdateUserView(views.APIView):
         }
     )
     def put(self, request):
+        logger.info(f"[Views] Profile update attempt for user ID: {request.user.pk}")
         instance = request.user
         serializer = UpdateUserSerializer(instance, data=request.data, partial=True)
 
         if serializer.is_valid():
             serializer.save()   # Update the user
-
-            logger.info(f"User profile updated: {request.user.email}")
-
+            logger.info(f"[Views] Profile updated successfully for user ID: {request.user.pk}")
             return Response(serializer.data, status=status.HTTP_200_OK)
 
-        logger.warning(f"Profile update failed for user: {request.user.email}. Errors: {serializer.errors}")
+        logger.warning(f"[Views] Profile update failed for user ID: {request.user.pk}. Errors: {serializer.errors}")
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -136,20 +141,20 @@ class LogoutUserView(views.APIView):
         }
     )
     def post(self, request):
+        logger.info(f"[Views] Logout requested by user ID: {request.user.pk}")
         serializer = LogoutUserSerializer(data=request.data)
         if not serializer.is_valid():
+            logger.warning(f"[Views] Logout failed: Invalid request body for user ID: {request.user.pk}")
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+       
         try:
             refresh_token = request.data["refresh"]
             token = RefreshToken(refresh_token)
             token.blacklist()
-
-            logger.info(f"User logged out successfully: {request.user.email}")
-
+            logger.info(f"[Views] User logged out successfully: {request.user.email}")
             return Response({"message": "Successfully logged out"}, status=status.HTTP_205_RESET_CONTENT)
         except Exception as error:
-            logger.error(f"Logout failed for user: {request.user.email}. Error: {str(error)}")
-
+            logger.error(f"[Views] Logout failure for user ID: {request.user.pk}. Exception: {str(error)}", exc_info=True)
             return Response({"error": "Invalid token or already blacklisted"}, status=status.HTTP_400_BAD_REQUEST)
         
 # Handle user delete logic
@@ -165,10 +170,63 @@ class DeleteUserView(views.APIView):
         }
     )
     def delete(self, request):
-        user_email = request.user.email
+        user_id = request.user.pk
         instance = request.user
         instance.delete()  # Delete the user
 
-        logger.info(f"User account deleted: {user_email}")
+        logger.info(f"[Views] Account deleted successfully for user ID: {user_id}")
         
         return Response({"message": "User has been deleted successfully."}, status=status.HTTP_204_NO_CONTENT)
+
+class PasswordResetRequestView(views.APIView):
+    @swagger_auto_schema(
+        operation_summary="Request Password Reset",
+        request_body=PasswordResetRequestSerializer,
+        responses={200: openapi.Response("Reset email sent if account exists")}
+    )
+    def post(self, request):
+        serializer = PasswordResetRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        email = serializer.validated_data['email']
+        logger.info(f"[Views] Password reset request received for email: {email}")
+
+        try:
+            user = User.objects.get(email=email)
+            uidb64 = urlsafe_base64_encode(force_bytes(user.pk))
+            token = PasswordResetTokenGenerator().make_token(user)
+            
+            reset_url = f"{settings.FRONTEND_URL.rstrip("/")}/reset-password/{uidb64}/{token}/"
+            
+            # Trigger Celery Task
+            send_password_reset_email_task.delay(user.email, reset_url)
+            logger.info(f"[Views] Password reset link dispatched via Celery for user ID: {user.pk}")
+        except User.DoesNotExist:
+            logger.info(f"[Views] Password reset requested for non-existent email: {email}. Ignored for security.")
+
+        return Response(
+            {"message": "If an account with this email exists, a password reset link has been sent."},
+            status=status.HTTP_200_OK
+        )
+
+class PasswordResetConfirmView(views.APIView):
+    @swagger_auto_schema(
+        operation_summary="Confirm Password Reset",
+        request_body=PasswordResetConfirmSerializer,
+        responses={200: openapi.Response("Password reset successful")}
+    )
+    def post(self, request):
+        logger.info("[Views] Password reset confirmation request received.")
+        serializer = PasswordResetConfirmSerializer(data=request.data)
+
+        if not serializer.is_valid():
+            logger.warning(f"[Views] Password reset confirmation failed validation: {serializer.errors}")
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        user = serializer.validated_data['user']
+        password = serializer.validated_data['password']
+        
+        user.set_password(password)
+        user.save()
+        logger.info(f"[Views] Password updated successfully for user ID: {user.pk}")
+
+        return Response({"message": "Password has been reset successfully."}, status=status.HTTP_200_OK)
