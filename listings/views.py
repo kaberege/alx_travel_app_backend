@@ -117,6 +117,21 @@ class ListingViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         queryset = super().get_queryset()
 
+        is_host_action = (
+            getattr(self, 'action', None) == 'host_listings' or 
+            'host' in self.request.path
+        )
+
+        if not is_host_action:
+            # Public endpoint: Return only published properties
+            queryset = queryset.filter(status='published')
+        else:
+            # Host endpoint: Authenticated host can see both draft and published
+            if self.request.user.is_authenticated:
+                queryset = queryset.filter(host=self.request.user)
+            else:
+                queryset = queryset.none()
+
         check_in = self.request.query_params.get('check_in')
         check_out = self.request.query_params.get('check_out')
         guests = self.request.query_params.get('guests')
@@ -195,6 +210,28 @@ class ListingViewSet(viewsets.ModelViewSet):
     )
     def destroy(self, request, *args, **kwargs):
         return super().destroy(request, *args, **kwargs)
+
+    # --- HOST-SPECIFIC LISTINGS ENDPOINT ---
+    # Target: GET /api/listings/host/
+    @swagger_auto_schema(
+        operation_summary="Retrieve host's properties",
+        operation_description="Retrieve all property listings owned by the authenticated host."
+    )
+    @action(detail=False, methods=['get'], url_path='host')
+    def host_listings(self, request):
+        if not request.user.is_authenticated:
+            return Response({"detail": "Authentication required."}, status=status.HTTP_401_UNAUTHORIZED)
+        
+        # Filter queryset strictly by the logged-in host
+        host_queryset = self.get_queryset().filter(host=request.user)
+        
+        page = self.paginate_queryset(host_queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+            
+        serializer = self.get_serializer(host_queryset, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
     # --- ACTION ENDPOINT FOR UPLOADING PROPERTY IMAGES ---
     # Target: POST /api/listings/{id}/upload_image/
