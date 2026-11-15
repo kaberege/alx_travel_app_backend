@@ -1,24 +1,42 @@
 from rest_framework import permissions
 
+class IsHostUser(permissions.BasePermission):
+    """
+    Allows access only to authenticated users with the 'host' role or staff/admins.
+    """
+    message = "Access restricted: You must be registered as a Host."
+
+    def has_permission(self, request, view):
+        return bool(
+            request.user and 
+            request.user.is_authenticated and 
+            (request.user.role == 'host' or request.user.is_staff)
+        )
+
+
 class IsHostOrReadOnly(permissions.BasePermission):
     """
-    Custom permission for Property Listings:
-    - Anyone (authenticated or unauthenticated) can view listings (GET).
-    - Only authenticated hosts can create listings.
-    - Only the listing host or superadmin can update/delete it.
+    - Safe methods (GET, HEAD, OPTIONS): Allowed for everyone (public/guests).
+    - Unsafe methods (POST, PUT, PATCH, DELETE): Requires authenticated Host ownership or Admin status.
     """
     message = "You must be authenticated as the owner (host) of this property to modify it."
 
     def has_permission(self, request, view):
         if request.method in permissions.SAFE_METHODS:
             return True
-        return bool(request.user and request.user.is_authenticated)
+        return bool(
+            request.user and 
+            request.user.is_authenticated and 
+            (request.user.role = 'host' or request.user.is_staff)
+        )
 
     def has_object_permission(self, request, view, obj):
         if request.method in permissions.SAFE_METHODS:
             return True
-        return bool(request.user.is_staff or obj.host == request.user)
-
+        return bool(
+            request.user.is_staff or 
+            (obj.host == request.user and request.user.role == 'host')
+        )
 
 class IsBookingOwnerOrHost(permissions.BasePermission):
     """

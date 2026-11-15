@@ -230,3 +230,22 @@ class PasswordResetConfirmView(views.APIView):
         logger.info(f"[Views] Password updated successfully for user ID: {user.pk}")
 
         return Response({"message": "Password has been reset successfully."}, status=status.HTTP_200_OK)
+
+class UpgradeToHostView(views.APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_summary="Upgrade user role to Host",
+        responses={200: "Successfully upgraded to host", 400: "Already a host"}
+    )
+    def post(self, request):
+        user = request.user
+        
+        if user.role == 'host':
+            return Response({"detail": "You are already registered as a host."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        user.role = 'host'
+        user.save()
+        
+        logger.info(f"[Views] User ID {user.pk} successfully upgraded their role to Host.")
+        return Response({"detail": "Successfully upgraded to host account.", "role": user.role}, status=status.HTTP_200_OK)

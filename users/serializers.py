@@ -11,6 +11,7 @@ User = get_user_model()
 # Serializer class for user registration
 class RegisterUserSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True)
+    role = serializers.CharField(read_only=True)
 
     class Meta:
         model = User

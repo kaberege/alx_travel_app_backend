@@ -19,7 +19,8 @@ class Amenity(models.Model):
 class Listing(models.Model):
     STATUS_CHOICES = [
         ('draft', 'Draft'),
-        ('published', 'Published')
+        ('published', 'Published'),
+        ('archived', 'Archived')
     ]
 
     property_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

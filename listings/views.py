@@ -3,6 +3,7 @@ import uuid
 import logging
 import requests
 from datetime import datetime
+from django.utils import timezone
 from django.db import transaction, IntegrityError
 from django.db.models import Q
 from django.contrib.auth import get_user_model
@@ -20,7 +21,7 @@ from .serializers import (
     BookingSerializer, ListingSerializer, PaymentSerializer,
     PropertyImageSerializer, ReviewSerializer
 )
-from .permissions import IsHostOrReadOnly, IsBookingOwnerOrHost, IsReviewAuthorOrReadOnly
+from .permissions import IsHostUser, IsHostOrReadOnly, IsBookingOwnerOrHost, IsReviewAuthorOrReadOnly
 from .pagination import StandardResultsSetPagination
 from .tasks import send_payment_confirmation_email, send_booking_confirmation_email
 
@@ -217,11 +218,8 @@ class ListingViewSet(viewsets.ModelViewSet):
         operation_summary="Retrieve host's properties",
         operation_description="Retrieve all property listings owned by the authenticated host."
     )
-    @action(detail=False, methods=['get'], url_path='host')
+    @action(detail=False, methods=['get'], url_path='host', permission_classes=[IsHostUser])
     def host_listings(self, request):
-        if not request.user.is_authenticated:
-            return Response({"detail": "Authentication required."}, status=status.HTTP_401_UNAUTHORIZED)
-        
         # Filter queryset strictly by the logged-in host
         host_queryset = self.get_queryset().filter(host=request.user)
         
@@ -233,6 +231,68 @@ class ListingViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(host_queryset, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
+    # --- PUBLISH LISTING ACTION ---
+    # Target: POST /api/listings/{id}/publish/
+    @swagger_auto_schema(
+        operation_summary="Publish property listing",
+        operation_description="Transition a draft listing to published status. Requires at least one image.",
+        responses={200: "Listing published successfully", 400: "Missing requirements", 403: "Not listing owner"}
+    )
+    @action(detail=True, methods=['post'], url_path='publish', permission_classes=[IsHostOrReadOnly])
+    def publish(self, request, pk=None):
+        listing = self.get_object()
+
+        # Business guardrail: Cannot publish without a photo gallery item
+        if not listing.images.exists():
+            return Response(
+                {"detail": "Cannot publish property. At least one gallery photo is required."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        listing.status = 'published'
+        listing.save()
+        
+        logger.info(f"Listing {listing.pk} published by Host {request.user.pk}")
+        return Response(
+            {"detail": "Listing published successfully.", "status": listing.status}, 
+            status=status.HTTP_200_OK
+        )
+
+    # --- ARCHIVE LISTING ACTION ---   
+    # Target: POST /api/listings/{id}/archive/
+    @swagger_auto_schema(
+        operation_summary="Archive a property listing",
+        operation_description="Archive a listing property and prevent archiving if there are active/pending future bookings",
+        responses={200: "Listing archived", 400: "Missing requirements", 403: "Not listing owner"}
+    )
+    @action(detail=True, methods=['post'], url_path='archive', permission_classes=[IsHostOrReadOnly])
+    def archive(self, request, pk=None):
+        listing = self.get_object()
+
+        # Prevent archiving if there are active/pending future bookings
+        today = timezone.now().date()
+        active_bookings_exist = listing.bookings.filter(
+            end_date__gte=today,
+            status__in=['pending', 'confirmed']
+        ).exists()
+
+        if active_bookings_exist:
+            return Response(
+                {
+                    "detail": "Cannot archive property. There are active or upcoming confirmed bookings. Please fulfill or cancel them first."
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        listing.status = 'archived'
+        listing.save()
+        
+        logger.info(f"Listing {listing.pk} archived by Host {request.user.pk}")
+        return Response(
+            {"detail": "Listing archived successfully.", "status": listing.status}, 
+            status=status.HTTP_200_OK
+        )  
+
     # --- ACTION ENDPOINT FOR UPLOADING PROPERTY IMAGES ---
     # Target: POST /api/listings/{id}/upload_image/
     @swagger_auto_schema(
@@ -240,7 +300,7 @@ class ListingViewSet(viewsets.ModelViewSet):
         request_body=PropertyImageSerializer,
         responses={201: PropertyImageSerializer(), 400: "Invalid payload/file format", 403: "Not listing owner"}
     )
-    @action(detail=True, methods=['post'], parser_classes=[MultiPartParser, FormParser], url_path='upload_image')
+    @action(detail=True, methods=['post'], parser_classes=[MultiPartParser, FormParser], url_path='upload_image', permission_classes=[IsHostOrReadOnly])
     def upload_image(self, request, pk=None):
         listing = self.get_object()
         is_main_image = not listing.images.exists()
@@ -296,7 +356,7 @@ class ListingViewSet(viewsets.ModelViewSet):
         ),
         responses={200: "Main image updated", 404: "Image not found"}
     )
-    @action(detail=True, methods=['patch'], url_path='set_main_image')
+    @action(detail=True, methods=['patch'], url_path='set_main_image', permission_classes=[IsHostOrReadOnly])
     def set_main_image(self, request, pk=None):
         listing = self.get_object()
         new_image_id = request.data.get('image_id')
@@ -336,7 +396,7 @@ class ListingViewSet(viewsets.ModelViewSet):
         ),
         responses={200: "Deleted successfully", 400: "Cannot delete final or main image"}
     )
-    @action(detail=True, methods=['delete'], url_path='delete_image')
+    @action(detail=True, methods=['delete'], url_path='delete_image', permission_classes=[IsHostOrReadOnly])
     def delete_image(self, request, pk=None):
         listing = self.get_object()
         image_id = request.data.get('image_id')
