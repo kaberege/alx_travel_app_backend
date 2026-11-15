@@ -76,6 +76,6 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
         return attrs
 
         #----------Notes--------
-        - Refactor user logic for preventing defining role choices. Nb: admin
-        - password change
-        - reset confirm token blacklisting
+        #- Refactor user logic for preventing defining role choices. Nb: admin
+        #- password change
+        #- reset confirm token blacklisting

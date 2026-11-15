@@ -21,11 +21,12 @@ class CustomUserManager(BaseUserManager):
         user.is_superuser=True
         user.is_staff=True
         user.is_active=True
+        user.role='admin'
         user.save(using=self.db)
         return user
 
 class CustomUser(AbstractUser):
-    ROLE_CHOICES = [('guest', 'Guest'), ('host', 'Host')]
+    ROLE_CHOICES = [('guest', 'Guest'), ('host', 'Host'), ('admin', 'Admin')]
 
     user_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     username = models.CharField(unique=False, max_length=50)
@@ -40,6 +41,7 @@ class CustomUser(AbstractUser):
     objects = CustomUserManager()
 
     USERNAME_FIELD = 'email'
+    REQUIRED_FIELDS = []
 
     def __str__(self):
         return f'{self.email} A {self.role}'
